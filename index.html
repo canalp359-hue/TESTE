@@ -769,6 +769,7 @@
   let currentAspect = 'landscape';
 
   let mediaEl = null;          // <audio> or <video>
+  let mediaFile = null;        // original File behind mediaEl, kept for offline audio decoding on export
   let mediaType = 'audio';
   let bgImage = null;
   let bgObjectUrl = null;
@@ -840,6 +841,7 @@
       mediaEl.remove();
     }
     mediaType = file.type.startsWith('video') ? 'video' : 'audio';
+    mediaFile = file;
     mediaEl = document.createElement(mediaType);
     mediaEl.src = URL.createObjectURL(file);
     mediaEl.crossOrigin = 'anonymous';
@@ -2107,12 +2109,16 @@
     lastLogoBox = { x:dx, y:dy, w:dw, h:dh };
   }
 
-  function draw(){
-    const t = mediaEl ? mediaEl.currentTime : 0;
+  // overrideT / particleSteps let the offline exporter render an exact,
+  // deterministic frame for any timestamp instead of reading "now" off the
+  // media element — this is what makes frame-by-frame export possible.
+  function draw(overrideT, particleSteps){
+    const t = overrideT != null ? overrideT : (mediaEl ? mediaEl.currentTime : 0);
+    const steps = particleSteps || 1;
     ctx.save();
     if(activeScale !== 1) ctx.scale(activeScale, activeScale);
     drawBackground();
-    updateParticles();
+    for(let i=0;i<steps;i++) updateParticles();
     drawParticles();
     drawLyrics(t);
     drawLogo();
@@ -2220,8 +2226,25 @@
   }
 
   // ---------------------------------------------------------------
-  // EXPORT (MediaRecorder)
+  // EXPORT
   // ---------------------------------------------------------------
+  // Two export paths:
+  //
+  //  1) OFFLINE (preferred) — renders every video frame one at a time,
+  //     deterministically, using WebCodecs (VideoEncoder/AudioEncoder) and
+  //     muxes them into a real .mp4 with the mp4-muxer library. Because each
+  //     frame is drawn and encoded on its own — never in real time — the
+  //     output can NEVER stutter or drop frames, no matter how heavy the
+  //     effects, how high the resolution, or how fast the machine is. This
+  //     is the fix for the freezing/travamento problem: the old method
+  //     recorded the canvas live via captureStream() while audio played at
+  //     real speed, so any frame that took longer than 1/30s to draw (blur,
+  //     particles, 4K) showed up as a stall or duplicated frame in the file.
+  //
+  //  2) REALTIME (fallback) — the original MediaRecorder approach, used
+  //     only when the browser lacks WebCodecs support (e.g. older Firefox).
+  //     It keeps working exactly as before, with the same freezing risk on
+  //     very heavy scenes — but it guarantees export still works everywhere.
   const exportBtn = document.getElementById('exportBtn');
   const progressOuter = document.getElementById('progressOuter');
   const progressInner = document.getElementById('progressInner');
@@ -2230,6 +2253,18 @@
   let isRecording = false;
   let recorder = null;
   let chunks = [];
+
+  const supportsOfflineExport = !!(
+    window.VideoEncoder && window.AudioEncoder && window.VideoFrame &&
+    window.EncodedVideoChunk && window.AudioData
+  );
+
+  let mp4MuxerLib = null;
+  function loadMp4Muxer(){
+    if(mp4MuxerLib) return mp4MuxerLib;
+    mp4MuxerLib = import('https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.mjs');
+    return mp4MuxerLib;
+  }
 
   exportBtn.addEventListener('click', startExport);
 
@@ -2255,17 +2290,14 @@
     try{ return MediaRecorder.isTypeSupported(o); }catch(e){ return false; }
   });
   if(exportFormatHint){
-    exportFormatHint.textContent = canExportMp4
-      ? '🎬 Exportação otimizada para redes sociais: MP4 (H.264 + AAC).'
-      : '⚠️ Este navegador não grava MP4 diretamente — o vídeo sairá em WebM. Para exportar em MP4, use uma versão recente do Chrome, Edge ou Safari.';
+    exportFormatHint.textContent = supportsOfflineExport
+      ? '🎬 Exportação quadro a quadro em MP4 (H.264 + AAC) — sem travamentos, em qualquer resolução ou velocidade das letras.'
+      : (canExportMp4
+        ? '🎬 Exportação em tempo real: MP4 (H.264 + AAC). Para exportação garantidamente sem travamentos (mesmo em 4K), use uma versão recente do Chrome ou Edge.'
+        : '⚠️ Este navegador não grava MP4 diretamente — o vídeo sairá em WebM. Para exportar em MP4, use uma versão recente do Chrome, Edge ou Safari.');
   }
 
-  function startExport(){
-    if(!mediaEl){ alert('Carregue um arquivo de áudio ou vídeo primeiro.'); return; }
-    if(isRecording) return;
-    setupAudioGraph();
-    if(!recDestination){ alert('Não foi possível preparar o áudio para exportação neste navegador.'); return; }
-
+  function beginExportUI(){
     isRecording = true;
     exportBtn.disabled = true;
     playBtn.disabled = true;
@@ -2273,6 +2305,241 @@
     downloadLink.style.display = 'none';
     progressOuter.classList.add('show');
     progressInner.style.width = '0%';
+  }
+
+  function endExportUI(){
+    isRecording = false;
+    exportBtn.disabled = false;
+    playBtn.disabled = false;
+    qualitySeg.querySelectorAll('button').forEach(b=>b.disabled = false);
+    // Switch drawing back to the live preview canvas at its normal scale.
+    ctx = previewCtx;
+    activeScale = 1;
+    draw();
+  }
+
+  function offerDownload(blob, ext, label){
+    const url = URL.createObjectURL(blob);
+    downloadLink.href = url;
+    downloadLink.download = 'lyric-video-' + exportQuality + '.' + ext;
+    downloadLink.style.display = 'block';
+    downloadLink.textContent = '✅ Vídeo pronto em ' + QUALITY_LABEL[exportQuality] + ' (' + label + ', ' + (blob.size/1024/1024).toFixed(1) + ' MB) — clique para salvar';
+    setTimeout(()=>{ progressOuter.classList.remove('show'); }, 800);
+  }
+
+  async function startExport(){
+    if(!mediaEl){ alert('Carregue um arquivo de áudio ou vídeo primeiro.'); return; }
+    if(isRecording) return;
+
+    if(supportsOfflineExport){
+      try{
+        await startOfflineExport();
+        return;
+      }catch(err){
+        console.error('Exportação offline falhou, tentando modo em tempo real.', err);
+        endExportUI();
+        progressOuter.classList.remove('show');
+      }
+    }
+    startRealtimeExport();
+  }
+
+  // ---------------------------------------------------------------
+  // OFFLINE EXPORT (WebCodecs + mp4-muxer) — deterministic, frame-by-frame
+  // ---------------------------------------------------------------
+  const AVC_CANDIDATES = ['avc1.640033','avc1.64002A','avc1.640028','avc1.4D401F','avc1.42E01E'];
+  const AAC_CODEC = 'mp4a.40.2';
+  const EXPORT_FPS = 30;
+
+  async function pickVideoEncoderConfig(w, h, bitrate, fps){
+    for(const codec of AVC_CANDIDATES){
+      const config = { codec, width:w, height:h, bitrate, framerate:fps, hardwareAcceleration:'no-preference' };
+      try{
+        const support = await VideoEncoder.isConfigSupported(config);
+        if(support && support.supported) return support.config || config;
+      }catch(e){ /* try next candidate */ }
+    }
+    return null;
+  }
+
+  async function pickAudioEncoderConfig(sampleRate, numberOfChannels){
+    const config = { codec: AAC_CODEC, sampleRate, numberOfChannels, bitrate: 160000 };
+    try{
+      const support = await AudioEncoder.isConfigSupported(config);
+      if(support && support.supported) return support.config || config;
+    }catch(e){ /* unsupported */ }
+    return null;
+  }
+
+  // Decodes the ORIGINAL uploaded file's audio, fully, off the realtime
+  // clock — this is what lets the audio track be encoded instantly instead
+  // of needing to "play" in real time like the old export did.
+  async function decodeMediaAudio(){
+    if(!mediaFile) return null;
+    const arrBuf = await mediaFile.arrayBuffer();
+    const tempCtx = new (window.OfflineAudioContext ? AudioContext : AudioContext)();
+    try{
+      return await tempCtx.decodeAudioData(arrBuf);
+    }catch(e){
+      console.warn('Não foi possível decodificar o áudio offline; o vídeo sairá mudo.', e);
+      return null;
+    }finally{
+      tempCtx.close().catch(()=>{});
+    }
+  }
+
+  async function encodeAudioBufferOffline(audioBuffer, audioEncoder){
+    const chunkFrames = 1024;
+    const channels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const total = audioBuffer.length;
+    const chData = [];
+    for(let c=0;c<channels;c++) chData.push(audioBuffer.getChannelData(c));
+
+    for(let start=0; start<total; start+=chunkFrames){
+      const frames = Math.min(chunkFrames, total-start);
+      const planar = new Float32Array(frames*channels);
+      for(let c=0;c<channels;c++){
+        planar.set(chData[c].subarray(start, start+frames), c*frames);
+      }
+      const audioData = new AudioData({
+        format:'f32-planar',
+        sampleRate,
+        numberOfFrames: frames,
+        numberOfChannels: channels,
+        timestamp: Math.round(start/sampleRate*1e6),
+        data: planar
+      });
+      audioEncoder.encode(audioData);
+      audioData.close();
+      if(audioEncoder.encodeQueueSize > 10){
+        await new Promise(res=> audioEncoder.addEventListener('dequeue', res, {once:true}));
+      }
+    }
+  }
+
+  // Seeks an <video> element and waits for the frame to actually be ready,
+  // instead of relying on real-time playback — needed so a background video
+  // lines up with the exact simulated timestamp of each rendered frame.
+  function seekVideoTo(video, time){
+    return new Promise(resolve=>{
+      if(Math.abs(video.currentTime - time) < 0.001){ resolve(); return; }
+      let done = false;
+      const finish = ()=>{ if(done) return; done = true; video.removeEventListener('seeked', finish); resolve(); };
+      video.addEventListener('seeked', finish);
+      video.currentTime = time;
+      setTimeout(finish, 2000); // safety net in case 'seeked' never fires
+    });
+  }
+
+  async function startOfflineExport(){
+    beginExportUI();
+
+    if(mediaEl && !mediaEl.paused) mediaEl.pause();
+    if(bgVideo) bgVideo.pause();
+
+    const target = targetResolution(exportQuality);
+    exportCanvas.width = target.w;
+    exportCanvas.height = target.h;
+    activeScale = target.w / canvas.width;
+    ctx = exportCtx;
+
+    const totalFrames = Math.max(1, Math.round(mediaDuration * EXPORT_FPS));
+    const frameDurationUs = 1e6 / EXPORT_FPS;
+
+    const videoConfig = await pickVideoEncoderConfig(target.w, target.h, QUALITY_BITRATE[exportQuality], EXPORT_FPS);
+    if(!videoConfig) throw new Error('Nenhuma configuração de vídeo H.264 suportada neste navegador.');
+
+    const audioBuffer = await decodeMediaAudio();
+    const audioConfig = audioBuffer ? await pickAudioEncoderConfig(audioBuffer.sampleRate, audioBuffer.numberOfChannels) : null;
+
+    const { Muxer, ArrayBufferTarget } = await loadMp4Muxer();
+    const muxer = new Muxer({
+      target: new ArrayBufferTarget(),
+      video: { codec:'avc', width: target.w, height: target.h, frameRate: EXPORT_FPS },
+      audio: audioConfig ? { codec:'aac', numberOfChannels: audioBuffer.numberOfChannels, sampleRate: audioBuffer.sampleRate } : undefined,
+      fastStart: 'in-memory'
+    });
+
+    let encodeError = null;
+    const videoEncoder = new VideoEncoder({
+      output: (chunk, meta)=> muxer.addVideoChunk(chunk, meta),
+      error: e=>{ encodeError = e; }
+    });
+    videoEncoder.configure(videoConfig);
+
+    let audioEncoder = null;
+    if(audioConfig){
+      audioEncoder = new AudioEncoder({
+        output: (chunk, meta)=> muxer.addAudioChunk(chunk, meta),
+        error: e=>{ encodeError = e; }
+      });
+      audioEncoder.configure(audioConfig);
+    }
+
+    try{
+      const hasBgVideo = bgMediaType === 'video' && bgVideo;
+      const bgVideoDuration = hasBgVideo && isFinite(bgVideo.duration) ? bgVideo.duration : 0;
+
+      for(let i=0;i<totalFrames;i++){
+        if(encodeError) throw encodeError;
+        const t = i / EXPORT_FPS;
+
+        if(hasBgVideo && bgVideoDuration>0){
+          await seekVideoTo(bgVideo, t % bgVideoDuration);
+        }
+
+        // Render particles at a fixed ~60 steps/sec regardless of export
+        // fps, so their speed always matches what's seen in the live
+        // preview instead of drifting with the chosen frame rate.
+        draw(t, Math.max(1, Math.round(60/EXPORT_FPS)));
+
+        const frame = new VideoFrame(exportCanvas, { timestamp: Math.round(i*frameDurationUs), duration: Math.round(frameDurationUs) });
+        const keyFrame = (i % (EXPORT_FPS*5) === 0);
+        videoEncoder.encode(frame, { keyFrame });
+        frame.close();
+
+        if(videoEncoder.encodeQueueSize > 4){
+          await new Promise(res=> videoEncoder.addEventListener('dequeue', res, {once:true}));
+        }
+
+        if(i % 4 === 0){
+          progressInner.style.width = Math.min(90, (i/totalFrames*90)) + '%';
+          await new Promise(res=>setTimeout(res, 0));
+        }
+      }
+      if(encodeError) throw encodeError;
+      await videoEncoder.flush();
+
+      if(audioBuffer && audioEncoder){
+        progressInner.style.width = '92%';
+        await encodeAudioBufferOffline(audioBuffer, audioEncoder);
+        await audioEncoder.flush();
+      }
+
+      progressInner.style.width = '98%';
+      muxer.finalize();
+      const { buffer } = muxer.target;
+      const blob = new Blob([buffer], { type: 'video/mp4' });
+
+      endExportUI();
+      progressInner.style.width = '100%';
+      offerDownload(blob, 'mp4', 'MP4');
+    }finally{
+      if(videoEncoder.state !== 'closed') videoEncoder.close();
+      if(audioEncoder && audioEncoder.state !== 'closed') audioEncoder.close();
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // REALTIME EXPORT (MediaRecorder) — fallback for browsers without
+  // WebCodecs support.
+  // ---------------------------------------------------------------
+  function startRealtimeExport(){
+    setupAudioGraph();
+    if(!recDestination){ alert('Não foi possível preparar o áudio para exportação neste navegador.'); return; }
+
+    beginExportUI();
     chunks = [];
 
     // Render into a higher-resolution off-screen canvas for export, instead
@@ -2326,14 +2593,7 @@
   }
 
   function onRecordingStop(){
-    isRecording = false;
-    exportBtn.disabled = false;
-    playBtn.disabled = false;
-    qualitySeg.querySelectorAll('button').forEach(b=>b.disabled = false);
-    // Switch drawing back to the live preview canvas at its normal scale.
-    ctx = previewCtx;
-    activeScale = 1;
-    draw();
+    endExportUI();
     progressInner.style.width = '100%';
 
     if(!chunks.length){
@@ -2346,12 +2606,7 @@
     const isMp4 = mime.includes('mp4');
     const ext = isMp4 ? 'mp4' : 'webm';
     const blob = new Blob(chunks, {type: mime});
-    const url = URL.createObjectURL(blob);
-    downloadLink.href = url;
-    downloadLink.download = 'lyric-video-' + exportQuality + '.' + ext;
-    downloadLink.style.display = 'block';
-    downloadLink.textContent = '✅ Vídeo pronto em ' + QUALITY_LABEL[exportQuality] + ' (' + (isMp4 ? 'MP4' : 'WebM') + ', ' + (blob.size/1024/1024).toFixed(1) + ' MB) — clique para salvar';
-    setTimeout(()=>{ progressOuter.classList.remove('show'); }, 800);
+    offerDownload(blob, ext, isMp4 ? 'MP4' : 'WebM');
   }
 
   // ---------------------------------------------------------------
