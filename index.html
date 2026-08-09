@@ -278,12 +278,23 @@
   }
   .sync-overlay.show{display:flex;}
   .sync-card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:28px 34px;max-width:560px;width:100%;text-align:center;}
-  .sync-line-current{font-family:'Anton',sans-serif;font-size:26px;letter-spacing:.5px;margin:16px 0;min-height:64px;display:flex;align-items:center;justify-content:center;}
+  .sync-line-current{font-family:'Anton',sans-serif;font-size:26px;letter-spacing:.5px;margin:16px 0;min-height:64px;display:flex;align-items:center;justify-content:center;transition:opacity .15s;}
+  .sync-line-current.paused{opacity:.4;}
   .sync-line-next{color:var(--text-dim);font-size:13px;}
   .sync-key{
     display:inline-block;background:var(--panel-2);border:1px solid var(--border);
     border-radius:6px;padding:3px 10px;font-family:var(--mono),monospace;color:var(--accent);
   }
+  .sync-progress{color:var(--text-dim);font-size:11.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;}
+  .sync-progress-bar{height:4px;background:var(--panel-2);border-radius:2px;margin-top:8px;overflow:hidden;}
+  .sync-progress-bar-inner{height:100%;background:var(--accent);width:0%;transition:width .15s;}
+  .sync-paused-badge{display:none;color:var(--danger);font-size:12px;font-weight:800;letter-spacing:1.5px;margin-top:10px;text-transform:uppercase;}
+  .sync-paused-badge.show{display:block;}
+  .sync-shortcuts{display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:center;color:var(--text-dim);font-size:11px;margin-top:14px;}
+  .sync-shortcuts b{color:var(--text);}
+  .sync-tap-btn{margin-top:6px;padding:14px;font-size:14px;}
+  @keyframes syncFlash{ 0%{ color:var(--accent); transform:scale(1.07);} 100%{ color:var(--text); transform:scale(1);} }
+  .sync-flash{ animation: syncFlash .28s ease-out; }
 
   ::-webkit-scrollbar{width:9px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
@@ -572,6 +583,42 @@
       </div>
     </details>
 
+    <details class="section" open>
+      <summary><h2>Fundo do texto</h2><span class="chev">▾</span></summary>
+      <div class="section-body">
+      <label class="field">
+        <div class="lbl">Estilo de destaque</div>
+        <select id="textBgSelect">
+          <option value="none">Nenhum</option>
+          <option value="solid">Caixa sólida</option>
+          <option value="translucent">Caixa translúcida</option>
+          <option value="pill">Pílula arredondada</option>
+          <option value="marker">Marca-texto (por linha)</option>
+          <option value="bar">Barra de legenda (largura total)</option>
+        </select>
+      </label>
+      <div id="textBgExtra" style="display:none;">
+        <label class="field">
+          <div class="lbl">Cor do fundo</div>
+          <input type="color" id="textBgColorInput" value="#000000">
+        </label>
+        <label class="field">
+          <div class="lbl">Opacidade <span class="val-badge" id="textBgOpacityVal">55%</span></div>
+          <input type="range" id="textBgOpacityRange" min="10" max="100" value="55">
+        </label>
+        <label class="field">
+          <div class="lbl">Espaçamento interno <span class="val-badge" id="textBgPaddingVal">18px</span></div>
+          <input type="range" id="textBgPaddingRange" min="4" max="48" value="18">
+        </label>
+        <label class="field" id="textBgRadiusField">
+          <div class="lbl">Arredondamento <span class="val-badge" id="textBgRadiusVal">14px</span></div>
+          <input type="range" id="textBgRadiusRange" min="0" max="60" value="14">
+        </label>
+      </div>
+      <div class="hint">Realça a letra sobre fundos claros ou muito ocupados — ótimo para Reels e TikTok.</div>
+      </div>
+    </details>
+
     <details class="section">
       <summary><h2>Efeitos de texto</h2><span class="chev">▾</span></summary>
       <div class="section-body">
@@ -644,10 +691,24 @@
 <div class="sync-overlay" id="syncOverlay">
   <div class="sync-card">
     <div class="hint">Aperte <span class="sync-key">ESPAÇO</span> no exato momento em que cada linha começa a ser cantada</div>
+    <div class="sync-progress" id="syncProgress" style="display:none;"></div>
+    <div class="sync-progress-bar" id="syncProgressBar" style="display:none;"><div class="sync-progress-bar-inner" id="syncProgressBarInner"></div></div>
     <div class="sync-line-current" id="syncCurrentLine">Pronto?</div>
     <div class="sync-line-next" id="syncNextLine"></div>
-    <div class="row" style="justify-content:center;margin-top:18px;gap:10px;">
+    <div class="sync-paused-badge" id="syncPausedBadge">⏸ Pausado</div>
+    <button class="btn primary block sync-tap-btn" id="syncTapBtn" style="display:none;">🥁 Marcar esta linha</button>
+    <div class="sync-shortcuts" id="syncShortcuts" style="display:none;">
+      <span><b>Espaço</b> marca</span>
+      <span><b>Backspace</b> desfaz última</span>
+      <span><b>P</b> pausa/retoma</span>
+      <span><b>← →</b> avança/volta 2s</span>
+      <span><b>Esc</b> cancela</span>
+    </div>
+    <div class="row" style="justify-content:center;margin-top:18px;gap:10px;flex-wrap:wrap;">
       <button class="btn primary" id="syncStartBtn">▶ Começar</button>
+      <button class="btn" id="syncPauseBtn" style="display:none;">⏸ Pausar</button>
+      <button class="btn" id="syncUndoBtn" style="display:none;" disabled>↶ Desfazer última</button>
+      <button class="btn" id="syncRestartBtn" style="display:none;">⟲ Reiniciar</button>
       <button class="btn danger" id="syncCancelBtn">Cancelar</button>
     </div>
   </div>
@@ -722,7 +783,8 @@
     font:'Poppins', size:54, color:'#ffffff', highlight:'#e8a33d',
     align:'center', x:0.5, y:0.86,
     anim:'fade', outline:true, glow:false, shadow:true,
-    overlay:0.40
+    overlay:0.40,
+    bgType:'none', bgColor:'#000000', bgOpacity:0.55, bgPadding:18, bgRadius:14
   };
 
   let imgFx = {
@@ -1216,7 +1278,16 @@
   const syncOverlay = document.getElementById('syncOverlay');
   const syncCurrentLine = document.getElementById('syncCurrentLine');
   const syncNextLine = document.getElementById('syncNextLine');
+  const syncProgress = document.getElementById('syncProgress');
+  const syncProgressBar = document.getElementById('syncProgressBar');
+  const syncProgressBarInner = document.getElementById('syncProgressBarInner');
+  const syncPausedBadge = document.getElementById('syncPausedBadge');
+  const syncTapBtn = document.getElementById('syncTapBtn');
+  const syncShortcuts = document.getElementById('syncShortcuts');
   const syncStartBtn = document.getElementById('syncStartBtn');
+  const syncPauseBtn = document.getElementById('syncPauseBtn');
+  const syncUndoBtn = document.getElementById('syncUndoBtn');
+  const syncRestartBtn = document.getElementById('syncRestartBtn');
   const syncCancelBtn = document.getElementById('syncCancelBtn');
   document.getElementById('syncBtn').addEventListener('click', openSync);
 
@@ -1224,48 +1295,151 @@
   let syncIndex = 0;
   let syncStamps = [];
   let syncActive = false;
+  let syncPaused = false;
 
   function openSync(){
     if(!mediaEl){ alert('Carregue um arquivo de áudio ou vídeo primeiro.'); return; }
     syncLinesRaw = lyricsInput.value.split('\n').map(l=>l.replace(LRC_RE,'$4').trim()).filter(l=>l.length>0);
     if(syncLinesRaw.length===0){ alert('Digite as linhas da letra na caixa de texto primeiro (uma por linha).'); return; }
+    syncIndex = 0; syncStamps = []; syncActive = false; syncPaused = false;
+    syncCurrentLine.textContent = 'Pronto?';
+    syncCurrentLine.classList.remove('paused');
+    syncNextLine.textContent = 'Primeira linha: “'+syncLinesRaw[0]+'”';
+    syncStartBtn.style.display = 'inline-flex';
+    syncPauseBtn.style.display = 'none';
+    syncUndoBtn.style.display = 'none';
+    syncRestartBtn.style.display = 'none';
+    syncTapBtn.style.display = 'none';
+    syncShortcuts.style.display = 'none';
+    syncProgress.style.display = 'none';
+    syncProgressBar.style.display = 'none';
+    syncPausedBadge.classList.remove('show');
+    syncOverlay.classList.add('show');
+  }
+
+  function updateSyncLinesUI(){
+    syncCurrentLine.textContent = syncLinesRaw[syncIndex];
+    syncNextLine.textContent = syncLinesRaw[syncIndex+1] ? 'A seguir: '+syncLinesRaw[syncIndex+1] : 'Última linha';
+    syncProgress.textContent = 'Linha '+(syncIndex+1)+' de '+syncLinesRaw.length;
+    syncProgressBarInner.style.width = (syncIndex/syncLinesRaw.length*100)+'%';
+    syncUndoBtn.disabled = syncStamps.length===0;
+  }
+
+  function flashMarkFeedback(){
+    syncCurrentLine.classList.remove('sync-flash');
+    void syncCurrentLine.offsetWidth; // restart CSS animation
+    syncCurrentLine.classList.add('sync-flash');
+  }
+
+  function markLine(){
+    if(!syncActive || syncPaused) return;
+    syncStamps.push({time: mediaEl.currentTime, text: syncLinesRaw[syncIndex]});
+    syncIndex++;
+    if(syncIndex >= syncLinesRaw.length){ finalizeSync(); return; }
+    flashMarkFeedback();
+    updateSyncLinesUI();
+  }
+
+  function undoLastMark(){
+    if(!syncActive || syncStamps.length===0) return;
+    const removed = syncStamps.pop();
+    syncIndex--;
+    mediaEl.currentTime = Math.max(0, removed.time - 1.5);
+    flashMarkFeedback();
+    updateSyncLinesUI();
+  }
+
+  function togglePause(){
+    if(!syncActive || !mediaEl) return;
+    syncPaused = !syncPaused;
+    if(syncPaused){
+      mediaEl.pause();
+      syncPauseBtn.textContent = '▶ Retomar';
+      syncPausedBadge.classList.add('show');
+      syncCurrentLine.classList.add('paused');
+    } else {
+      mediaEl.play();
+      syncPauseBtn.textContent = '⏸ Pausar';
+      syncPausedBadge.classList.remove('show');
+      syncCurrentLine.classList.remove('paused');
+    }
+  }
+
+  function seekSyncBy(delta){
+    if(!mediaEl) return;
+    const max = mediaDuration || mediaEl.duration || 1e9;
+    mediaEl.currentTime = Math.max(0, Math.min(max, mediaEl.currentTime + delta));
+  }
+
+  function restartSync(){
+    if(!mediaEl) return;
+    mediaEl.pause();
+    syncActive = false; syncPaused = false;
     syncIndex = 0; syncStamps = [];
+    mediaEl.currentTime = 0;
+    syncCurrentLine.classList.remove('paused');
+    syncPausedBadge.classList.remove('show');
+    syncPauseBtn.textContent = '⏸ Pausar';
+    syncPauseBtn.style.display = 'none';
+    syncUndoBtn.style.display = 'none';
+    syncRestartBtn.style.display = 'none';
+    syncTapBtn.style.display = 'none';
+    syncShortcuts.style.display = 'none';
+    syncProgress.style.display = 'none';
+    syncProgressBar.style.display = 'none';
+    syncStartBtn.style.display = 'inline-flex';
     syncCurrentLine.textContent = 'Pronto?';
     syncNextLine.textContent = 'Primeira linha: “'+syncLinesRaw[0]+'”';
-    syncOverlay.classList.add('show');
   }
 
   syncStartBtn.addEventListener('click', ()=>{
     mediaEl.currentTime = 0;
     mediaEl.play();
     syncActive = true;
-    syncStartBtn.style.display='none';
-    syncCurrentLine.textContent = syncLinesRaw[0];
-    syncNextLine.textContent = syncLinesRaw[1] ? 'A seguir: '+syncLinesRaw[1] : '';
+    syncPaused = false;
+    syncStartBtn.style.display = 'none';
+    syncPauseBtn.style.display = 'inline-flex';
+    syncUndoBtn.style.display = 'inline-flex';
+    syncRestartBtn.style.display = 'inline-flex';
+    syncTapBtn.style.display = 'flex';
+    syncShortcuts.style.display = 'flex';
+    syncProgress.style.display = 'block';
+    syncProgressBar.style.display = 'block';
+    updateSyncLinesUI();
   });
+
+  syncPauseBtn.addEventListener('click', togglePause);
+  syncUndoBtn.addEventListener('click', undoLastMark);
+  syncRestartBtn.addEventListener('click', restartSync);
+  syncTapBtn.addEventListener('click', markLine);
 
   function closeSync(){
     syncActive = false;
+    syncPaused = false;
     syncOverlay.classList.remove('show');
-    syncStartBtn.style.display='inline-flex';
     mediaEl && mediaEl.pause();
   }
   syncCancelBtn.addEventListener('click', closeSync);
 
   window.addEventListener('keydown', e=>{
-    if(!syncActive) return;
+    if(!syncOverlay.classList.contains('show')) return;
+    if(e.code==='Escape'){ e.preventDefault(); closeSync(); return; }
+    if(!syncActive || e.repeat) return;
     if(e.code==='Space' || e.code==='Enter'){
       e.preventDefault();
-      syncStamps.push({time: mediaEl.currentTime, text: syncLinesRaw[syncIndex]});
-      syncIndex++;
-      if(syncIndex >= syncLinesRaw.length){
-        finalizeSync();
-        return;
-      }
-      syncCurrentLine.textContent = syncLinesRaw[syncIndex];
-      syncNextLine.textContent = syncLinesRaw[syncIndex+1] ? 'A seguir: '+syncLinesRaw[syncIndex+1] : 'Última linha';
-    } else if(e.code==='Escape'){
-      closeSync();
+      markLine();
+    } else if(e.code==='Backspace'){
+      e.preventDefault();
+      undoLastMark();
+    } else if(e.code==='KeyP'){
+      e.preventDefault();
+      togglePause();
+    } else if(e.code==='ArrowLeft'){
+      e.preventDefault();
+      seekSyncBy(-2);
+    } else if(e.code==='ArrowRight'){
+      e.preventDefault();
+      seekSyncBy(2);
     }
   });
 
@@ -1324,6 +1498,50 @@
       style.y = parseFloat(b.dataset.pos);
       draw();
     });
+  });
+
+  // ---------------------------------------------------------------
+  // TEXT BACKGROUND ("destaque" behind lyrics — box / pill / marker / bar)
+  // ---------------------------------------------------------------
+  const textBgSelect = document.getElementById('textBgSelect');
+  const textBgExtra = document.getElementById('textBgExtra');
+  const textBgRadiusField = document.getElementById('textBgRadiusField');
+  const textBgColorInput = document.getElementById('textBgColorInput');
+  const textBgOpacityRange = document.getElementById('textBgOpacityRange');
+  const textBgPaddingRange = document.getElementById('textBgPaddingRange');
+  const textBgRadiusRange = document.getElementById('textBgRadiusRange');
+  // Sensible starting opacity per style, applied the first time each style is picked.
+  const BG_DEFAULT_OPACITY = { solid:90, translucent:45, pill:88, marker:78, bar:70 };
+  const bgOpacityTouched = {};
+
+  textBgSelect.addEventListener('change', e=>{
+    style.bgType = e.target.value;
+    textBgExtra.style.display = style.bgType === 'none' ? 'none' : 'block';
+    textBgRadiusField.style.display = (style.bgType === 'pill' || style.bgType === 'marker') ? 'none' : 'block';
+    if(style.bgType !== 'none' && !bgOpacityTouched[style.bgType] && BG_DEFAULT_OPACITY[style.bgType]){
+      const v = BG_DEFAULT_OPACITY[style.bgType];
+      textBgOpacityRange.value = v;
+      style.bgOpacity = v/100;
+      document.getElementById('textBgOpacityVal').textContent = v+'%';
+    }
+    draw();
+  });
+  textBgColorInput.addEventListener('input', e=>{ style.bgColor = e.target.value; draw(); });
+  textBgOpacityRange.addEventListener('input', e=>{
+    bgOpacityTouched[style.bgType] = true;
+    style.bgOpacity = parseInt(e.target.value,10)/100;
+    document.getElementById('textBgOpacityVal').textContent = e.target.value+'%';
+    draw();
+  });
+  textBgPaddingRange.addEventListener('input', e=>{
+    style.bgPadding = parseInt(e.target.value,10);
+    document.getElementById('textBgPaddingVal').textContent = e.target.value+'px';
+    draw();
+  });
+  textBgRadiusRange.addEventListener('input', e=>{
+    style.bgRadius = parseInt(e.target.value,10);
+    document.getElementById('textBgRadiusVal').textContent = e.target.value+'px';
+    draw();
   });
 
   document.getElementById('animSelect').addEventListener('change', e=>{ style.anim = e.target.value; draw(); });
@@ -1617,6 +1835,56 @@
     return width;
   }
 
+  function roundRectPath(c, x, y, w, h, r){
+    r = Math.max(0, Math.min(r, w/2, h/2));
+    c.beginPath();
+    c.moveTo(x+r, y);
+    c.arcTo(x+w, y, x+w, y+h, r);
+    c.arcTo(x+w, y+h, x, y+h, r);
+    c.arcTo(x, y+h, x, y, r);
+    c.arcTo(x, y, x+w, y, r);
+    c.closePath();
+  }
+
+  // Whole-block background (solid box / translucent box / pill / full-width bar)
+  // drawn once behind every wrapped line of the active lyric.
+  function drawTextBlockBg(box, animOpacity, offsetY, scale){
+    if(style.bgType==='none' || style.bgType==='marker' || !box) return;
+    const w = canvas.width;
+    const padX = style.bgPadding, padY = style.bgPadding*0.7;
+    let rx = box.x - padX, rw = box.w + padX*2;
+    if(style.bgType==='bar'){ rx = w*0.03; rw = w*0.94; }
+    const ry = box.y - padY, rh = box.h + padY*2;
+    const cx = rx + rw/2, cy = ry + rh/2 + offsetY;
+    const radius = style.bgType==='pill' ? rh/2 : style.bgRadius;
+    ctx.save();
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = style.bgOpacity * animOpacity;
+    ctx.translate(cx, cy);
+    ctx.scale(scale, scale);
+    roundRectPath(ctx, -rw/2, -rh/2, rw, rh, radius);
+    ctx.fillStyle = style.bgColor;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Per-line "highlighter marker" background — a slightly tilted rounded
+  // rectangle behind just that line's text, hugging its actual width.
+  function drawLineMarker(x0, lineW, lineHeightPx, animOpacity){
+    if(style.bgType!=='marker' || lineW<=0) return;
+    const padX = style.bgPadding, padY = style.bgPadding*0.55;
+    const rw = lineW + padX*2, rh = lineHeightPx*0.62 + padY*2;
+    ctx.save();
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = style.bgOpacity * (animOpacity==null?1:animOpacity);
+    ctx.translate(x0 + lineW/2, 0);
+    ctx.rotate(-1.4*Math.PI/180);
+    roundRectPath(ctx, -rw/2, -rh/2, rw, rh, Math.min(6, rh/2));
+    ctx.fillStyle = style.bgColor;
+    ctx.fill();
+    ctx.restore();
+  }
+
   function drawLyrics(t){
     const active = getActiveLine(t);
     if(!active){ lastTextBox = null; return; }
@@ -1678,6 +1946,8 @@
     lastTextBox = { x: anchorX - (style.align==='center'?maxLineW/2:(style.align==='right'?maxLineW:0)),
                      y: baseY - lineHeight/2, w: maxLineW, h: totalH };
 
+    drawTextBlockBg(lastTextBox, opacity, offsetY, scale);
+
     // typewriter: how many total characters (across all wrapped lines) to reveal
     const totalChars = lines.reduce((a,l)=>a+l.length,0) + Math.max(0,lines.length-1);
     let typeRevealChars = totalChars;
@@ -1713,6 +1983,7 @@
         const fullW = ctx.measureText(lstr).width;
         let x0 = style.align==='center' ? -fullW/2 : (style.align==='right' ? -fullW : 0);
         ctx.textAlign = 'left';
+        drawLineMarker(x0, fullW, lineHeight, opacity);
 
         if(style.outline){
           ctx.lineWidth = Math.max(2, style.size*0.06);
@@ -1754,6 +2025,8 @@
           const fullW = ctx.measureText(lstr).width;
           let x0 = style.align==='center' ? -fullW/2 : (style.align==='right' ? -fullW : 0);
           ctx.textAlign = 'left';
+          const shownW = ctx.measureText(shown).width;
+          drawLineMarker(x0, shownW, lineHeight, opacity);
           if(style.outline){
             ctx.lineWidth = Math.max(2, style.size*0.06);
             ctx.strokeStyle = 'rgba(0,0,0,0.85)';
@@ -1762,7 +2035,6 @@
           ctx.fillStyle = lineColor;
           ctx.fillText(shown, x0, 0);
           if(cursorOn){
-            const shownW = ctx.measureText(shown).width;
             ctx.fillStyle = style.highlight;
             ctx.fillRect(x0+shownW+2, -style.size*0.42, Math.max(2,style.size*0.06), style.size*0.84);
           }
@@ -1776,6 +2048,7 @@
         const fullW = ctx.measureText(lstr).width;
         let cx = style.align==='center' ? -fullW/2 : (style.align==='right' ? -fullW : 0);
         ctx.textAlign = 'left';
+        drawLineMarker(cx, fullW, lineHeight, opacity);
         for(let ci=0; ci<lstr.length; ci++){
           const ch = lstr[ci];
           const chW = ctx.measureText(ch).width;
@@ -1802,6 +2075,9 @@
         ctx.translate(anchorX, y);
         ctx.scale(scale, scale);
         ctx.globalAlpha = opacity;
+        const fullW = ctx.measureText(lstr).width;
+        const x0 = style.align==='center' ? -fullW/2 : (style.align==='right' ? -fullW : 0);
+        drawLineMarker(x0, fullW, lineHeight, opacity);
         if(style.outline){
           ctx.lineWidth = Math.max(2, style.size*0.06);
           ctx.strokeStyle = 'rgba(0,0,0,0.85)';
